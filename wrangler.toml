@@ -1,0 +1,29 @@
+name = "churchmouse-api"
+main = "workers/src/index.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding      = "DB"
+database_name = "churchmouse-db"
+database_id  = "319bf9ad-ffaf-42d6-8a53-09950e3297f8"
+
+[[r2_buckets]]
+binding     = "PDF_BUCKET"
+bucket_name = "churchmouse-pdfs"
+
+[vars]
+FRONTEND_URL = "https://churchmouse.co.za"
+APP_ENV      = "production"
+
+[[routes]]
+pattern = "churchmouse.co.za/.api/*"
+zone_name = "churchmouse.co.za"
+
+[[routes]]
+pattern = "www.churchmouse.co.za/.api/*"
+zone_name = "churchmouse.co.za"
+
+[assets]
+directory = "./frontend"
+not_found_handling = "single-page-application"

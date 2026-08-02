@@ -1,0 +1,6 @@
+name = "my-worker"
+main = "src/index.js"
+account_id = "ec24a0e8ae48624c5ab34e2d28114f2d"
+database_id = "319bf9ad-ffaf-42d6-8a53-09950e3297f8"
+compatibility_date = "2025-05-04"
+workers_dev = true
