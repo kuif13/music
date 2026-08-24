@@ -8,122 +8,140 @@
  */
 
 import {
-  jsonResponse, errorResponse,
-  isAdminOrCM, newId
+    jsonResponse, errorResponse,
+    isAdminOrCM, newId
 } from '../lib/utils.js';
 
 export async function handleMaster(request, env, path, user) {
-  const method  = request.method;
-  const idMatch = path.match(/^\/master\/([^/]+)/);
-  const id      = idMatch ? idMatch[1] : null;
+    const method = request.method;
+    const idMatch = path.match(/^\/master\/([^/]+)/);
+    const id = idMatch ? idMatch[1] : null;
 
-  // ── GET /master  (list, paginated) ───────────────────────────────────────────
-  if (!id && method === 'GET') {
-    const url    = new URL(request.url);
-    const limit  = Math.min(parseInt(url.searchParams.get('limit')  || '50'), 500);
-    const offset = parseInt(url.searchParams.get('offset') || '0');
-      const sort = url.searchParams.get('sort') === 'created' ? 'created' : 'title';
+    // ── GET /master  (list, paginated) ───────────────────────────────────────────
+    if (!id && method === 'GET') {
+        const url = new URL(request.url);
+        const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 500);
+        const offset = parseInt(url.searchParams.get('offset') || '0');
+        const sort = url.searchParams.get('sort') === 'created' ? 'created' : 'title';
 
-      const orderClause = sort === 'created'
-          ? 'm.created_at DESC'
-          : `TRIM(m.title, '0123456789'), CAST(REPLACE(m.title, TRIM(m.title, '0123456789'), '') AS INTEGER)`;
+        const orderClause = sort === 'created'
+            ? 'm.created_at DESC'
+            : `TRIM(m.title, '0123456789'), CAST(REPLACE(m.title, TRIM(m.title, '0123456789'), '') AS INTEGER)`;
 
-      const { results } = await env.DB.prepare(
-          `SELECT m.*,
+        const { results } = await env.DB.prepare(
+            `SELECT m.*,
                 (SELECT COUNT(*) FROM pdf_detail p WHERE p.master_id = m.id) AS pdf_count
          FROM music_master m
          ORDER BY ${orderClause}
          LIMIT ? OFFSET ?`
-      ).bind(limit, offset).all();
+        ).bind(limit, offset).all();
 
-      const { total } = await env.DB.prepare('SELECT COUNT(*) AS total FROM music_master').first();
-      return jsonResponse({ results, total, limit, offset });
-  }
-  
+        const counterRow = await env.DB.prepare(
+            `SELECT value AS total FROM meta_counters WHERE name = 'music_master_count'`
+        ).first();
+        const total = counterRow ? counterRow.total : 0;
 
-  // ── POST /master (create) ────────────────────────────────────────────────────
-  if (!id && method === 'POST') {
-    if (!isAdminOrCM(user)) return errorResponse('Forbidden', 403);
+        return jsonResponse({ results, total, limit, offset });
+    }
 
-    const { title, description, keywords, melody, composer, notes } = await request.json();
-    if (!title?.trim()) return errorResponse('Title is required');
 
-    const newMasterId = newId();
-    const now = Math.floor(Date.now() / 1000);
+    // ── POST /master (create) ────────────────────────────────────────────────────
+    if (!id && method === 'POST') {
+        if (!isAdminOrCM(user)) return errorResponse('Forbidden', 403);
 
-    await env.DB.prepare(
-      `INSERT INTO music_master (id, title, description, keywords, melody, composer, notes, created_by, created_at, updated_at)
+        const { title, description, keywords, melody, composer, notes } = await request.json();
+        if (!title?.trim()) return errorResponse('Title is required');
+
+        const newMasterId = newId();
+        const now = Math.floor(Date.now() / 1000);
+
+        const insertStmt = env.DB.prepare(
+            `INSERT INTO music_master (id, title, description, keywords, melody, composer, notes, created_by, created_at, updated_at)
        VALUES (?,?,?,?,?,?,?,?,?,?)`
-    ).bind(
-      newMasterId,
-      title.trim(),
-      description || null,
-      keywords    || null,
-      melody      || null,
-      composer    || null,
-      notes       || null,
-      user.sub,
-      now, now
-    ).run();
+        ).bind(
+            newMasterId,
+            title.trim(),
+            description || null,
+            keywords || null,
+            melody || null,
+            composer || null,
+            notes || null,
+            user.sub,
+            now, now
+        );
 
-    return jsonResponse({ id: newMasterId }, 201);
-  }
+        const counterStmt = env.DB.prepare(
+            `UPDATE meta_counters SET value = value + 1 WHERE name = 'music_master_count'`
+        );
 
-  // ── GET /master/:id ──────────────────────────────────────────────────────────
-  if (id && method === 'GET') {
-    const master = await env.DB.prepare('SELECT * FROM music_master WHERE id = ?').bind(id).first();
-    if (!master) return errorResponse('Not found', 404);
+        // batch() runs both statements atomically — if one fails, neither commits
+        await env.DB.batch([insertStmt, counterStmt]);
 
-    const { results: pdfs } = await env.DB.prepare(
-      'SELECT id, description, key_signature, file_name, file_size, created_at FROM pdf_detail WHERE master_id = ? ORDER BY description, key_signature, file_name'
-    ).bind(id).all();
+        return jsonResponse({ id: newMasterId }, 201);
+    }
 
-    return jsonResponse({ ...master, pdfs });
-  }
+    // ── GET /master/:id ──────────────────────────────────────────────────────────
+    if (id && method === 'GET') {
+        const master = await env.DB.prepare('SELECT * FROM music_master WHERE id = ?').bind(id).first();
+        if (!master) return errorResponse('Not found', 404);
 
-  // ── PUT /master/:id ──────────────────────────────────────────────────────────
-  if (id && method === 'PUT') {
-    if (!isAdminOrCM(user)) return errorResponse('Forbidden', 403);
+        const { results: pdfs } = await env.DB.prepare(
+            'SELECT id, description, key_signature, file_name, file_size, created_at FROM pdf_detail WHERE master_id = ? ORDER BY description, key_signature, file_name'
+        ).bind(id).all();
 
-    const { title, description, keywords, melody, composer, notes } = await request.json();
-    if (!title?.trim()) return errorResponse('Title is required');
+        return jsonResponse({ ...master, pdfs });
+    }
 
-    const row = await env.DB.prepare('SELECT id FROM music_master WHERE id = ?').bind(id).first();
-    if (!row) return errorResponse('Not found', 404);
+    // ── PUT /master/:id ──────────────────────────────────────────────────────────
+    if (id && method === 'PUT') {
+        if (!isAdminOrCM(user)) return errorResponse('Forbidden', 403);
 
-    await env.DB.prepare(
-      `UPDATE music_master SET title=?, description=?, keywords=?, melody=?, composer=?, notes=?, updated_at=? WHERE id=?`
-    ).bind(
-      title.trim(),
-      description || null,
-      keywords    || null,
-      melody      || null,
-      composer    || null,
-      notes       || null,
-      Math.floor(Date.now() / 1000),
-      id
-    ).run();
+        const { title, description, keywords, melody, composer, notes } = await request.json();
+        if (!title?.trim()) return errorResponse('Title is required');
 
-    return jsonResponse({ message: 'Updated' });
-  }
+        const row = await env.DB.prepare('SELECT id FROM music_master WHERE id = ?').bind(id).first();
+        if (!row) return errorResponse('Not found', 404);
 
-  // ── DELETE /master/:id ───────────────────────────────────────────────────────
-  if (id && method === 'DELETE') {
-    if (!isAdminOrCM(user)) return errorResponse('Forbidden', 403);
+        await env.DB.prepare(
+            `UPDATE music_master SET title=?, description=?, keywords=?, melody=?, composer=?, notes=?, updated_at=? WHERE id=?`
+        ).bind(
+            title.trim(),
+            description || null,
+            keywords || null,
+            melody || null,
+            composer || null,
+            notes || null,
+            Math.floor(Date.now() / 1000),
+            id
+        ).run();
 
-    // Get all child R2 keys to delete from object storage
-    const { results: pdfs } = await env.DB.prepare(
-      'SELECT r2_key FROM pdf_detail WHERE master_id = ?'
-    ).bind(id).all();
+        return jsonResponse({ message: 'Updated' });
+    }
 
-    // Delete from R2
-    await Promise.all(pdfs.map(p => env.PDF_BUCKET.delete(p.r2_key)));
+    // ── DELETE /master/:id ───────────────────────────────────────────────────────
+    if (id && method === 'DELETE') {
+        if (!isAdminOrCM(user)) return errorResponse('Forbidden', 403);
 
-    // D1 cascade will remove pdf_detail rows
-    await env.DB.prepare('DELETE FROM music_master WHERE id = ?').bind(id).run();
+        // Get all child R2 keys to delete from object storage
+        const { results: pdfs } = await env.DB.prepare(
+            'SELECT r2_key FROM pdf_detail WHERE master_id = ?'
+        ).bind(id).all();
 
-    return jsonResponse({ message: 'Deleted' });
-  }
+        // Delete from R2
+        await Promise.all(pdfs.map(p => env.PDF_BUCKET.delete(p.r2_key)));
 
-  return errorResponse('Not found', 404);
+        // D1 cascade will remove pdf_detail rows
+        const deleteStmt = env.DB.prepare('DELETE FROM music_master WHERE id = ?').bind(id);
+
+        const counterStmt = env.DB.prepare(
+            `UPDATE meta_counters SET value = value - 1 WHERE name = 'music_master_count'`
+        );
+
+        // batch() runs both statements atomically — if one fails, neither commits
+        await env.DB.batch([deleteStmt, counterStmt]);
+
+        return jsonResponse({ message: 'Deleted' });
+    }
+
+    return errorResponse('Not found', 404);
 }
