@@ -1183,6 +1183,11 @@
                 🎼 Enhance
             </button>
             <button class="btn btn-secondary btn-sm"
+                    id="darken-ink-btn"
+                    onclick="toggleDarkenInk()">
+                Darken Ink
+            </button>
+            <button class="btn btn-secondary btn-sm"
                     id="mode-auto-btn"
                     onclick="setPdfRenderMode('auto')">
                 Auto
@@ -1887,8 +1892,16 @@
         let currentZoom = 1.0;
 
         let pdfRenderMode = 'auto';   // auto | vector | scan
-        updatePdfModeButtons();
         let detectedPdfType = 'vector';
+
+        // Called once the declarations below exist — updatePdfModeButtons reads
+        // detectedPdfType, so calling it any earlier hits the temporal dead zone.
+        updatePdfModeButtons();
+
+        // Off by default: pages now render at their true resolution, so they
+        // already match what Adobe shows. The darkening pass is there for faint
+        // or washed-out originals that need the help.
+        let darkenInkEnabled = false;
 
         async function viewPdf(pdfId, title, queue, queueIdx) {
             currentPdfId = pdfId;
@@ -1923,11 +1936,20 @@
 
         function updatePdfModeButtons() {
 
-            document.getElementById('mode-auto-btn')
-                .classList.toggle(
-                    'fit-mode-active',
-                    pdfRenderMode === 'auto'
-                );
+            const autoBtn =
+                document.getElementById('mode-auto-btn');
+
+            autoBtn.classList.toggle(
+                'fit-mode-active',
+                pdfRenderMode === 'auto'
+            );
+
+            // Show what Auto resolved to, so a page rendering with the wrong
+            // pipeline is obvious from the toolbar.
+            autoBtn.textContent =
+                currentPdfDoc
+                    ? 'Auto (' + detectedPdfType + ')'
+                    : 'Auto';
 
             document.getElementById('mode-vector-btn')
                 .classList.toggle(
@@ -1942,9 +1964,22 @@
                 );
         }
 
+        // How much of page 1 a single image must cover before we call the
+        // document a scan.
+        const SCAN_COVERAGE_THRESHOLD = 0.6;
+
+        // Decides whether page 1 is a scanned bitmap or real vector artwork.
+        //
+        // Counting text items is not enough on its own: most scanners run OCR
+        // by default, which leaves an invisible text layer behind, and a scan
+        // with OCR would then be misread as vector. So the primary signal is
+        // how much of the page area the painted images cover. Text is only a
+        // fallback for pages whose images we could not measure.
         async function detectPdfType(pdfDoc) {
 
             try {
+
+                const OPS = pdfjsLib.OPS;
 
                 const page =
                     await pdfDoc.getPage(1);
@@ -1952,39 +1987,86 @@
                 const ops =
                     await page.getOperatorList();
 
-                const imageCount =
-                    ops.fnArray.filter(fn =>
-                        fn === pdfjsLib.OPS.paintImageXObject ||
-                        fn === pdfjsLib.OPS.paintInlineImageXObject
-                    ).length;
+                const baseViewport =
+                    page.getViewport({ scale: 1 });
 
-                const textContent =
-                    await page.getTextContent();
+                const pageArea =
+                    baseViewport.width * baseViewport.height;
 
-                const textCount =
-                    textContent.items.length;
+                // An image is always painted into the unit square, so the page
+                // area it covers is |det(CTM)|. Since det(A x B) = det(A)det(B),
+                // tracking the running determinant is enough — we never need the
+                // full matrix.
+                let det = 1;
+                const stack = [];
 
-             /*   console.log(
-                    'PDF detection:',
-                    {
-                        imageCount,
-                        textCount
+                let imageArea  = 0;
+                let imageCount = 0;
+
+                for (let i = 0; i < ops.fnArray.length; i++) {
+
+                    const fn = ops.fnArray[i];
+
+                    if (fn === OPS.save) {
+
+                        stack.push(det);
+
+                    } else if (fn === OPS.restore) {
+
+                        if (stack.length) det = stack.pop();
+
+                    } else if (fn === OPS.transform) {
+
+                        const [a, b, c, d] = ops.argsArray[i];
+                        det *= (a * d) - (b * c);
+
+                    } else if (fn === OPS.paintFormXObjectBegin) {
+
+                        // Behaves like save + transform.
+                        stack.push(det);
+
+                        const m = ops.argsArray[i][0];
+
+                        if (m) det *= (m[0] * m[3]) - (m[1] * m[2]);
+
+                    } else if (fn === OPS.paintFormXObjectEnd) {
+
+                        if (stack.length) det = stack.pop();
+
+                    } else if (
+                        fn === OPS.paintImageXObject ||
+                        fn === OPS.paintInlineImageXObject ||
+                        fn === OPS.paintImageMaskXObject
+                    ) {
+
+                        imageCount++;
+                        imageArea += Math.abs(det);
                     }
-                );  */
+                }
 
-                //
-                // Typical scanned page:
-                // 1 image
-                // almost no text
-                //
+                const coverage =
+                    pageArea > 0
+                        ? imageArea / pageArea
+                        : 0;
 
                 if (
-                    textCount === 0 &&
-                    imageCount > 0
+                    imageCount > 0 &&
+                    coverage >= SCAN_COVERAGE_THRESHOLD
                 ) {
                     return 'scan';
                 }
 
+                // Coverage did not settle it. Fall back to the original signal —
+                // images present and no text at all — so anything this viewer
+                // already treated as a scan still is one, however the images
+                // happened to be measured.
+                if (imageCount > 0) {
+
+                    const textContent =
+                        await page.getTextContent();
+
+                    if (textContent.items.length === 0) return 'scan';
+                }
 
                 return 'vector';
 
@@ -1994,6 +2076,13 @@
 
                 return 'vector';
             }
+        }
+
+        function toggleDarkenInk() {
+            darkenInkEnabled = !darkenInkEnabled;
+            document.getElementById('darken-ink-btn')
+                .classList.toggle('fit-mode-active', darkenInkEnabled);
+            renderAllPages();
         }
 
         function toggleContrast() {
@@ -2027,6 +2116,8 @@
                     await detectPdfType(
                         currentPdfDoc
                     );
+
+                updatePdfModeButtons();
 
              /*   console.log(
                     'Detected PDF type:',
@@ -2359,11 +2450,25 @@
                         * currentZoom;
                 }
 
-                const MUSIC_RENDER_SCALE = 3;
+                const mode =
+                    getEffectivePdfMode();
 
+                // Draw straight onto the device pixel grid — one rasterisation at
+                // the size the page is actually displayed, which is what Adobe
+                // and the browser's own PDF viewer do.
+                //
+                // This used to render at 3x and let CSS shrink the canvas back.
+                // That hurt both kinds of page. A scan has no detail beyond its
+                // own fixed resolution, so the extra scale bought nothing and
+                // just added an upscale/downscale round trip. And on vector
+                // pages the CSS 3:1 shrink is an ordinary linear filter, not a
+                // proper box filter, so it softened edges that pdf.js had
+                // already anti-aliased correctly at 1x.
+
+                const renderScale = window.devicePixelRatio || 1;
 
                 const viewport = page.getViewport({
-                    scale: fitScale * MUSIC_RENDER_SCALE
+                    scale: fitScale * renderScale
                 });
 
                 const canvas = document.createElement('canvas');
@@ -2372,45 +2477,65 @@
                 canvas.height = viewport.height;
 
                 canvas.style.width =
-                    (viewport.width / MUSIC_RENDER_SCALE) + 'px';
+                    (viewport.width / renderScale) + 'px';
 
                 canvas.style.height =
-                    (viewport.height / MUSIC_RENDER_SCALE) + 'px';
+                    (viewport.height / renderScale) + 'px';
 
                 canvas.style.background = '#fff';
                 canvas.style.boxShadow = '0 2px 8px rgba(0,0,0,0.4)';
 
                 container.appendChild(canvas);
 
+                // Reading pixels back forces a CPU-backed canvas, which costs us
+                // GPU-accelerated scaling. Only ask for it when a filter will
+                // actually run.
+                const needsPixelWork =
+                    darkenInkEnabled ||
+                    musicEnhanceEnabled ||
+                    contrastBoostEnabled ||
+                    thresholdEnabled ||
+                    thinLineEnhanceEnabled;
+
                 const ctx = canvas.getContext('2d', {
-                    willReadFrequently: true
+                    willReadFrequently: needsPixelWork
                 });
+
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
 
                 await page.render({
                     canvasContext: ctx,
                     viewport
                 }).promise;
 
-                const mode =
-                    getEffectivePdfMode();
+                // Both of these are opt-in now. Left on by default they were the
+                // main reason a page looked heavier here than in Adobe, and
+                // running at the display resolution makes them bite harder than
+                // they did on the old 3x buffer, where the downscale washed much
+                // of the effect back out again.
+                if (darkenInkEnabled) {
 
-                if (mode === 'vector') {
+                    if (mode === 'vector') {
 
-                    darkenMusicInk(
-                        ctx,
-                        canvas.width,
-                        canvas.height
-                    );
+                        // Assumes paper is pure white, which holds for vector
+                        // pages. A scan's paper sits below the 235 threshold, so
+                        // this would dim the whole sheet to 35%.
+                        darkenMusicInk(
+                            ctx,
+                            canvas.width,
+                            canvas.height
+                        );
 
-                } else {
+                    } else {
 
-                    enhanceScannedMusic(
-                        ctx,
-                        canvas.width,
-                        canvas.height
-                    );
+                        enhanceScannedMusic(
+                            ctx,
+                            canvas.width,
+                            canvas.height
+                        );
+                    }
                 }
-                ``
 
               /*  console.log(
                     'Rendered page',
