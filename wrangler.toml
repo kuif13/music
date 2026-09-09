@@ -13,7 +13,7 @@ binding     = "PDF_BUCKET"
 bucket_name = "churchmouse-pdfs"
 
 [vars]
-FRONTEND_URL = "https://churchmouse.co.za"
+FRONTEND_URL = "https://www.churchmouse.co.za/music"
 APP_ENV      = "production"
 
 [[routes]]

@@ -7,7 +7,7 @@
     "deploy": "wrangler deploy",
     "db:init": "wrangler d1 execute churchmouse-db --file=schema.sql",
     "db:local": "wrangler d1 execute churchmouse-db --local --file=schema.sql",
-    "pages:deploy": "wrangler pages deploy frontend/ --project-name=churchmouse-music"
+    "pages:deploy": "wrangler pages deploy frontend/ --project-name=churchmouse-frontend"
   },
   "dependencies": {},
   "devDependencies": {

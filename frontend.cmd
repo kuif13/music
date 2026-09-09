@@ -1,1 +1,1 @@
-wrangler pages deploy frontend
+wrangler pages deploy frontend --project-name=churchmouse-frontend
