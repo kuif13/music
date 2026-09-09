@@ -1182,6 +1182,11 @@
                     onclick="toggleMusicEnhance()">
                 🎼 Enhance
             </button>
+            <button class="btn btn-secondary btn-sm fit-mode-active"
+                    id="sharpen-btn"
+                    onclick="toggleSharpen()">
+                Sharpen
+            </button>
             <button class="btn btn-secondary btn-sm"
                     id="darken-ink-btn"
                     onclick="toggleDarkenInk()">
@@ -1903,6 +1908,17 @@
         // or washed-out originals that need the help.
         let darkenInkEnabled = false;
 
+        // Vector rasterisation multiplier, applied on top of devicePixelRatio.
+        // 2 is the useful range: 1 leaves sub-pixel staff lines uneven, and 3
+        // costs 9x the memory for a difference that is hard to see.
+        const VECTOR_SUPERSAMPLE = 2;
+
+        // Unsharp mask strength. Around 0.4-0.5 crispens hairlines without
+        // ringing; past ~0.8 haloes appear along stems and beams.
+        const SHARPEN_AMOUNT = 0.5;
+
+        let sharpenEnabled = true;
+
         async function viewPdf(pdfId, title, queue, queueIdx) {
             currentPdfId = pdfId;
             viewerQueue = queue || [];
@@ -2076,6 +2092,67 @@
 
                 return 'vector';
             }
+        }
+
+        // Unsharp mask: subtract a blurred copy from the original, which raises
+        // local contrast at edges only. Flat paper and solid ink are left alone
+        // because there the blurred value equals the original.
+        function sharpenEdges(ctx, width, height, amount) {
+
+            const src = ctx.getImageData(0, 0, width, height);
+            const s   = src.data;
+
+            const out = ctx.createImageData(width, height);
+            const o   = out.data;
+
+            for (let y = 0; y < height; y++) {
+
+                const yUp   = y > 0          ? y - 1 : y;
+                const yDown = y < height - 1 ? y + 1 : y;
+
+                for (let x = 0; x < width; x++) {
+
+                    const xLeft  = x > 0         ? x - 1 : x;
+                    const xRight = x < width - 1 ? x + 1 : x;
+
+                    const i = (y * width + x) * 4;
+
+                    const rowUp   = yUp   * width;
+                    const rowMid  = y     * width;
+                    const rowDown = yDown * width;
+
+                    for (let c = 0; c < 3; c++) {
+
+                        const blurred = (
+                            s[(rowUp   + xLeft)  * 4 + c] +
+                            s[(rowUp   + x)      * 4 + c] +
+                            s[(rowUp   + xRight) * 4 + c] +
+                            s[(rowMid  + xLeft)  * 4 + c] +
+                            s[(rowMid  + x)      * 4 + c] +
+                            s[(rowMid  + xRight) * 4 + c] +
+                            s[(rowDown + xLeft)  * 4 + c] +
+                            s[(rowDown + x)      * 4 + c] +
+                            s[(rowDown + xRight) * 4 + c]
+                        ) / 9;
+
+                        const v =
+                            s[i + c] + amount * (s[i + c] - blurred);
+
+                        o[i + c] = v < 0 ? 0 : v > 255 ? 255 : v;
+                    }
+
+                    o[i + 3] = s[i + 3];
+                }
+            }
+
+            ctx.putImageData(out, 0, 0);
+        }
+
+        function toggleSharpen() {
+            sharpenEnabled = !sharpenEnabled;
+            document.getElementById('sharpen-btn')
+                .classList.toggle('fit-mode-active', sharpenEnabled);
+            renderAllPages();
         }
 
         function toggleDarkenInk() {
@@ -2465,10 +2542,25 @@
                 // proper box filter, so it softened edges that pdf.js had
                 // already anti-aliased correctly at 1x.
 
-                const renderScale = window.devicePixelRatio || 1;
+                const dpr = window.devicePixelRatio || 1;
+
+                // Vector pages get supersampled: at Fit Page a whole sheet is
+                // only ~620px wide, which puts engraved staff lines under one
+                // device pixel, so they land between pixels and anti-alias to a
+                // faint, uneven grey. Rendering at 2x and shrinking with a
+                // high-quality drawImage keeps them even.
+                //
+                // The old 3x path failed not because supersampling is wrong but
+                // because it shrank via CSS — the compositor's linear filter —
+                // and then darkened the anti-aliasing fringe on top. A scan
+                // still gains nothing from extra scale, so it stays at 1x.
+                const supersample =
+                    mode === 'scan'
+                        ? 1
+                        : VECTOR_SUPERSAMPLE;
 
                 const viewport = page.getViewport({
-                    scale: fitScale * renderScale
+                    scale: fitScale * dpr
                 });
 
                 const canvas = document.createElement('canvas');
@@ -2477,10 +2569,10 @@
                 canvas.height = viewport.height;
 
                 canvas.style.width =
-                    (viewport.width / renderScale) + 'px';
+                    (viewport.width / dpr) + 'px';
 
                 canvas.style.height =
-                    (viewport.height / renderScale) + 'px';
+                    (viewport.height / dpr) + 'px';
 
                 canvas.style.background = '#fff';
                 canvas.style.boxShadow = '0 2px 8px rgba(0,0,0,0.4)';
@@ -2492,6 +2584,7 @@
                 // actually run.
                 const needsPixelWork =
                     darkenInkEnabled ||
+                    sharpenEnabled ||
                     musicEnhanceEnabled ||
                     contrastBoostEnabled ||
                     thresholdEnabled ||
@@ -2504,10 +2597,63 @@
                 ctx.imageSmoothingEnabled = true;
                 ctx.imageSmoothingQuality = 'high';
 
-                await page.render({
-                    canvasContext: ctx,
-                    viewport
-                }).promise;
+                if (supersample === 1) {
+
+                    await page.render({
+                        canvasContext: ctx,
+                        viewport
+                    }).promise;
+
+                } else {
+
+                    // Rasterise large, then shrink with drawImage rather than by
+                    // giving the canvas a smaller CSS size. drawImage at high
+                    // smoothing quality does a real area downscale; the CSS route
+                    // hands the compositor a linear filter, which is what softened
+                    // the page under the previous 3x approach.
+                    const hiRes = page.getViewport({
+                        scale: fitScale * dpr * supersample
+                    });
+
+                    const off = document.createElement('canvas');
+
+                    off.width  = hiRes.width;
+                    off.height = hiRes.height;
+
+                    const offCtx = off.getContext('2d');
+
+                    await page.render({
+                        canvasContext: offCtx,
+                        viewport: hiRes,
+                        background: '#ffffff'
+                    }).promise;
+
+                    ctx.drawImage(
+                        off,
+                        0, 0, off.width, off.height,
+                        0, 0, canvas.width, canvas.height
+                    );
+
+                    // Release the oversized buffer promptly — a multi-page score
+                    // holds every page canvas at once as it is.
+                    off.width = 0;
+                    off.height = 0;
+                }
+
+                // Unsharp mask, after the downscale so it acts at the resolution
+                // actually shown. Deepens the dark side of each edge and lifts
+                // the light side, which is what makes hairlines and noteheads
+                // read crisply. Unlike the old darkening pass it does not push
+                // whole regions toward black, so strokes stay their true weight.
+                if (sharpenEnabled) {
+
+                    sharpenEdges(
+                        ctx,
+                        canvas.width,
+                        canvas.height,
+                        SHARPEN_AMOUNT
+                    );
+                }
 
                 // Both of these are opt-in now. Left on by default they were the
                 // main reason a page looked heavier here than in Adobe, and
