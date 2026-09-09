@@ -140,13 +140,13 @@ This deploys the Worker and binds D1 + R2.
 ## Step 8 — Deploy the Frontend (Cloudflare Pages)
 
 ```bash
-npx wrangler pages deploy frontend/ --project-name=churchmouse-music
+npx wrangler pages deploy frontend/ --project-name=churchmouse-frontend --branch=production
 ```
 
 On first run it creates the Pages project. Subsequent deploys use the same command.
 
 ### Custom domain for Pages:
-1. Cloudflare Dashboard → Pages → churchmouse-music → Custom domains
+1. Cloudflare Dashboard → Pages → churchmouse-frontend → Custom domains
 2. Add `churchmouse.co.za`
 3. Cloudflare will handle the DNS record automatically
 
