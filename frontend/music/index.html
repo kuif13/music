@@ -598,6 +598,45 @@
             row-gap: 0.5rem;
         }
 
+        /* Fullscreen is for reading, so everything but Close gets out of the way.
+           The toolbar also leaves the flex column and floats over the page —
+           otherwise the viewer would only gain the height of the hidden buttons
+           and still lose a band across the top to an almost-empty bar.
+
+           Keyed off a class rather than :fullscreen because that pseudo-class
+           still needs three vendor spellings, and an unrecognised one invalidates
+           the whole selector list. The class is toggled by the same change
+           listeners that relabel the fullscreen button. */
+        #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar {
+            position: absolute;
+            top: 0;
+            right: 0;
+            left: auto;
+            width: auto;
+            padding: 0.45rem 0.55rem;
+            background: transparent;
+            border-bottom: none;
+            z-index: 10;
+        }
+
+            #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > * {
+                display: none;
+            }
+
+            #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #viewer-close-btn {
+                display: inline-flex;
+                /* Dimmed so it doesn't compete with the music, but kept on a
+                   solid ground so it stays legible over a white page. */
+                opacity: 0.5;
+                background: rgba(15,12,10,0.75);
+                transition: opacity var(--transition);
+            }
+
+                #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #viewer-close-btn:hover,
+                #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #viewer-close-btn:focus {
+                    opacity: 1;
+                }
+
         .viewer-title {
             flex: 1;
             font-family: 'Cormorant Garamond', serif;
@@ -1276,7 +1315,8 @@
     <!-- PDF Viewer Overlay -->
     <div id="pdf-viewer-overlay">
         <div class="viewer-toolbar">
-            <button class="btn btn-ghost" onclick="closePdfViewer()">✕ Close</button>
+            <button class="btn btn-ghost" id="viewer-close-btn" onclick="closePdfViewer()"
+                    title="Close (Esc leaves fullscreen)">✕ Close</button>
             <button class="btn btn-secondary btn-sm" id="fullscreen-btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
             <span class="viewer-title" id="viewer-title"></span>
             <button class="btn btn-secondary btn-sm" id="fit-width-btn" onclick="setFitMode('width')">Fit Width</button>
@@ -3113,14 +3153,31 @@
             }
         }
 
-        function updateFullscreenBtn() {
+        function syncFullscreenUi() {
+            const full = isViewerFullscreen();
+
             const btn = document.getElementById('fullscreen-btn');
-            if (!btn) return;
-            btn.textContent = isViewerFullscreen() ? '⤢ Exit Fullscreen' : '⛶ Fullscreen';
+            if (btn) btn.textContent = full ? '⤢ Exit Fullscreen' : '⛶ Fullscreen';
+
+            // Drives the CSS that strips the toolbar back to just Close.
+            document.getElementById('pdf-viewer-overlay')
+                .classList.toggle('viewer-fullscreen', full);
+
+            // Fit scale is derived from the frame's size, which has just changed.
+            // Deferred two frames: at event time the browser has not necessarily
+            // finished laying the element out at its new size, so measuring now
+            // would re-fit the page to the old dimensions.
+            if (currentPdfDoc) {
+                requestAnimationFrame(() =>
+                    requestAnimationFrame(() => {
+                        if (currentPdfDoc) renderAllPages();
+                    })
+                );
+            }
         }
 
         ['fullscreenchange', 'webkitfullscreenchange', 'mozfullscreenchange', 'MSFullscreenChange']
-            .forEach(evt => document.addEventListener(evt, updateFullscreenBtn));
+            .forEach(evt => document.addEventListener(evt, syncFullscreenUi));
 
         function viewerNavigate(dir) {
             const newIdx = viewerIndex + dir;
