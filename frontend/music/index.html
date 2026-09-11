@@ -236,6 +236,12 @@
                 background: rgba(255,255,255,0.07);
             }
 
+        /* Sign out lives at the foot of the mobile menu; on desktop it stays in
+           the header bar, so this stays hidden there. */
+        .nav-signout {
+            display: none;
+        }
+
         /* Name and role inside the mobile menu; the header bar has no room. */
         .nav-user {
             display: none;
@@ -1048,8 +1054,27 @@
                 display: none;
             }
 
+            /* The header bar shows who is signed in; Sign out moves into the
+               menu, where there is room for it and it is harder to hit by
+               accident. The role stays behind in .nav-user. */
             .user-badge {
+                display: block;
+                max-width: 38vw;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            #header-signout {
                 display: none;
+            }
+
+            .nav-signout {
+                display: block;
+                margin-top: 0.35rem;
+                padding-top: 0.7rem;
+                border-top: 1px solid rgba(255,255,255,0.08);
+                color: var(--brass-lt);
             }
 
             .modal {
@@ -1222,11 +1247,12 @@
                 <button class="nav-btn" data-page="playlists" onclick="navigate('playlists')">♪ Playlists</button>
                 <button class="nav-btn" data-page="content" onclick="navigate('content')" id="nav-content" style="display:none">📁 Content</button>
                 <button class="nav-btn" data-page="admin" onclick="navigate('admin')" id="nav-admin" style="display:none">⚙ Admin</button>
+                <button class="nav-btn nav-signout" onclick="confirmLogout()">⏻ Sign out</button>
             </nav>
             <div class="header-right">
                 <span class="user-badge" id="user-badge"></span>
                 <span class="role-pill" id="role-pill"></span>
-                <button class="btn btn-ghost btn-sm" onclick="doLogout()">Sign out</button>
+                <button class="btn btn-ghost btn-sm" id="header-signout" onclick="confirmLogout()">Sign out</button>
             </div>
         </header>
 
@@ -1894,11 +1920,12 @@
             rp.textContent = authUser.role.replace('_', ' ');
             rp.className = 'role-pill role-' + authUser.role;
 
-            // Mirrored into the mobile menu, where the header has no room for it.
+            // The mobile header already shows the name, so the menu carries the
+            // role instead of repeating it.
             const navUser = document.getElementById('nav-user');
             if (navUser) {
                 navUser.textContent =
-                    authUser.name + ' · ' + authUser.role.replace('_', ' ');
+                    'Signed in as ' + authUser.role.replace('_', ' ');
             }
 
             navigate('search');
@@ -1940,6 +1967,15 @@
                 btn.disabled = false;
                 btn.textContent = 'Sign In';
             }
+        }
+
+        // Sign out is easy to hit by accident on a phone, where it now sits in the
+        // menu. Uses the same native confirm as the other destructive actions
+        // (deleting a master, a PDF, a playlist) rather than a new pattern.
+        function confirmLogout() {
+            const who = authUser && authUser.name ? ', ' + authUser.name : '';
+            if (!confirm('Sign out' + who + '?')) return;
+            doLogout();
         }
 
         function doLogout() {
