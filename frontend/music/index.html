@@ -213,6 +213,40 @@
                 color: var(--brass-lt);
             }
 
+        /* Hamburger — only ever visible on narrow screens (see media query). */
+        .nav-toggle {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            width: 38px;
+            height: 38px;
+            background: none;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: var(--radius);
+            color: var(--stone-lt);
+            font-size: 1.05rem;
+            line-height: 1;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: color var(--transition), background var(--transition);
+        }
+
+            .nav-toggle:hover {
+                color: var(--ivory);
+                background: rgba(255,255,255,0.07);
+            }
+
+        /* Name and role inside the mobile menu; the header bar has no room. */
+        .nav-user {
+            display: none;
+            font-size: 0.78rem;
+            color: var(--stone-lt);
+            padding: 0.3rem 0.8rem 0.5rem;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            margin-bottom: 0.25rem;
+            text-transform: capitalize;
+        }
+
         .header-right {
             display: flex;
             align-items: center;
@@ -555,6 +589,13 @@
             align-items: center;
             gap: 0.75rem;
             flex-shrink: 0;
+
+            /* Without this the toolbar's buttons run off the right edge and
+               become unreachable — there is no horizontal scroll to recover
+               them. Wrapping only engages when the row genuinely doesn't fit,
+               so a wide window looks exactly as before. */
+            flex-wrap: wrap;
+            row-gap: 0.5rem;
         }
 
         .viewer-title {
@@ -914,7 +955,57 @@
                 padding: 0.75rem;
             }
 
+            #header {
+                padding: 0 0.75rem;
+                gap: 0.6rem;
+            }
+
             .brand-name span {
+                display: none;
+            }
+
+            .nav-toggle {
+                display: flex;
+                order: -1;          /* left of the logo, the conventional spot */
+            }
+
+            .nav-user {
+                display: block;
+            }
+
+            /* The nav was a horizontally scrolling strip with its scrollbar
+               hidden, so items past the fold were both off-screen and invisible.
+               On narrow screens it becomes a drop-down panel under the header
+               instead, where every item is reachable. */
+            .header-nav {
+                position: absolute;
+                top: 100%;
+                left: 0;
+                right: 0;
+                display: none;
+                flex: none;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.15rem;
+                padding: 0.5rem;
+                overflow: visible;
+                background: var(--velvet-mid);
+                border-bottom: 1px solid rgba(184,134,11,0.3);
+                box-shadow: var(--shadow-md);
+                z-index: 120;
+            }
+
+            #header.nav-open .header-nav {
+                display: flex;
+            }
+
+            .nav-btn {
+                text-align: left;
+                padding: 0.7rem 0.8rem;
+                font-size: 0.95rem;
+            }
+
+            .role-pill {
                 display: none;
             }
 
@@ -933,6 +1024,21 @@
             .pdf-actions {
                 width: 100%;
                 justify-content: flex-start;
+            }
+
+            /* The title has flex:1, which would starve the buttons once the row
+               wraps. Give it its own line at the top and let the controls use
+               the full width below it. */
+            .viewer-toolbar {
+                padding: 0.5rem 0.6rem;
+                gap: 0.4rem;
+            }
+
+            .viewer-title {
+                order: -1;
+                flex: 0 0 100%;
+                font-size: 0.95rem;
+                text-align: center;
             }
         }
 
@@ -1069,7 +1175,10 @@
                 <div class="brand-logo-fallback" style="display:none">🎺</div>
                 <span class="brand-name">ChurchMouse <span>Music</span></span>
             </div>
+            <button class="nav-toggle" id="nav-toggle" onclick="toggleNav()"
+                    aria-label="Menu" aria-controls="main-nav" aria-expanded="false">☰</button>
             <nav class="header-nav" id="main-nav">
+                <div class="nav-user" id="nav-user"></div>
                 <button class="nav-btn" data-page="search" onclick="navigate('search')">🔍 Search</button>
                 <button class="nav-btn" data-page="playlists" onclick="navigate('playlists')">♪ Playlists</button>
                 <button class="nav-btn" data-page="content" onclick="navigate('content')" id="nav-content" style="display:none">📁 Content</button>
@@ -1514,6 +1623,98 @@
         let viewerQueue = [];          // playlist viewer queue
         let viewerIndex = 0;
 
+        // ─── Session ──────────────────────────────────────────────────────────────────
+        // The API issues a 24h JWT whose exp claim is readable client-side, so an
+        // expired session can be caught before a request goes out instead of after
+        // the server rejects it. Catching it late was what discarded a search term:
+        // the 401 handler reloaded the page, taking the typed query with it.
+
+        const SESSION_LEEWAY_SECONDS = 10;   // don't start a call about to expire
+        const PENDING_SEARCH_KEY     = 'cm_pending_search';
+        const PENDING_SEARCH_TTL_MS  = 15 * 60 * 1000;
+
+        function tokenExpiry(token) {
+            if (!token) return null;
+
+            const parts = token.split('.');
+            if (parts.length !== 3) return null;
+
+            try {
+                let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+                while (b64.length % 4) b64 += '=';
+
+                // Decode as UTF-8: the payload carries the user's name, which may
+                // be non-ASCII and would corrupt a raw atob string.
+                const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                const exp = JSON.parse(new TextDecoder().decode(bytes)).exp;
+
+                return typeof exp === 'number' ? exp : null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function isSessionValid() {
+            if (!authToken || !authUser) return false;
+
+            const exp = tokenExpiry(authToken);
+
+            // A token we can't parse is left for the server to judge, so a format
+            // change here can never lock anyone out.
+            if (exp === null) return true;
+
+            return exp > (Date.now() / 1000) + SESSION_LEEWAY_SECONDS;
+        }
+
+        // A search interrupted by an expired session is held here and replayed once
+        // the user signs back in. Time-limited so returning the next day doesn't
+        // silently re-run a stale query.
+        function stashPendingSearch(q) {
+            try {
+                localStorage.setItem(
+                    PENDING_SEARCH_KEY,
+                    JSON.stringify({ q, at: Date.now() })
+                );
+            } catch (e) { /* private mode / quota — not worth failing the search */ }
+        }
+
+        function clearPendingSearch() {
+            try { localStorage.removeItem(PENDING_SEARCH_KEY); } catch (e) {}
+        }
+
+        function takePendingSearch() {
+            try {
+                const raw = localStorage.getItem(PENDING_SEARCH_KEY);
+                clearPendingSearch();
+                if (!raw) return null;
+
+                const { q, at } = JSON.parse(raw);
+                if (!q || typeof at !== 'number') return null;
+
+                return (Date.now() - at) <= PENDING_SEARCH_TTL_MS ? q : null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        // Session ended while the app was open. Unlike doLogout this deliberately
+        // does not reload — a reload is what threw away the user's typing.
+        function handleSessionExpired(message) {
+            authToken = null;
+            authUser = null;
+            localStorage.removeItem('cm_token');
+            localStorage.removeItem('cm_user');
+
+            const overlay = document.getElementById('pdf-viewer-overlay');
+            if (overlay && overlay.classList.contains('open')) closePdfViewer();
+
+            showLogin();
+
+            if (message) {
+                showAlert(document.getElementById('login-alert'), message, 'info');
+            }
+        }
+
         // ─── Startup ──────────────────────────────────────────────────────────────────
         document.addEventListener('DOMContentLoaded', () => {
             const hash = window.location.hash;
@@ -1570,9 +1771,13 @@
             document.getElementById('login-screen').classList.add('open');
             document.getElementById('app').style.display = 'none';
             document.getElementById('login-email').focus();
-            document.getElementById('login-password').addEventListener('keydown', e => {
+
+            // Assigned rather than added: showLogin can now run mid-session (an
+            // expired token), and addEventListener would stack a new handler each
+            // time, firing doLogin once per past visit to this screen.
+            document.getElementById('login-password').onkeydown = e => {
                 if (e.key === 'Enter') doLogin();
-            });
+            };
         }
 
         function showResetScreen(token) {
@@ -1649,7 +1854,22 @@
             rp.textContent = authUser.role.replace('_', ' ');
             rp.className = 'role-pill role-' + authUser.role;
 
+            // Mirrored into the mobile menu, where the header has no room for it.
+            const navUser = document.getElementById('nav-user');
+            if (navUser) {
+                navUser.textContent =
+                    authUser.name + ' · ' + authUser.role.replace('_', ' ');
+            }
+
             navigate('search');
+
+            // Replay a search that an expired session interrupted, so the term
+            // does not have to be typed again.
+            const pending = takePendingSearch();
+            if (pending) {
+                document.getElementById('search-input').value = pending;
+                doSearch();
+            }
         }
 
         async function doLogin() {
@@ -1683,6 +1903,8 @@
         }
 
         function doLogout() {
+            // Signing out deliberately is a clean slate — no search replay.
+            clearPendingSearch();
             authToken = null;
             authUser = null;
             localStorage.removeItem('cm_token');
@@ -1690,8 +1912,41 @@
             location.reload();
         }
 
+        // ─── Mobile menu ──────────────────────────────────────────────────────────────
+        function toggleNav(force) {
+            const header = document.getElementById('header');
+            if (!header) return;
+
+            const open = force === undefined
+                ? !header.classList.contains('nav-open')
+                : force;
+
+            header.classList.toggle('nav-open', open);
+            document.getElementById('nav-toggle')
+                .setAttribute('aria-expanded', String(open));
+        }
+
+        // Dismiss on an outside tap, on Escape, and whenever the window grows past
+        // the breakpoint — otherwise the panel would linger as a stray block once
+        // the desktop layout returns.
+        document.addEventListener('click', e => {
+            const header = document.getElementById('header');
+            if (!header || !header.classList.contains('nav-open')) return;
+            if (e.target.closest('#main-nav') || e.target.closest('#nav-toggle')) return;
+            toggleNav(false);
+        });
+
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') toggleNav(false);
+        });
+
+        window.addEventListener('resize', () => {
+            if (window.innerWidth > 640) toggleNav(false);
+        });
+
         // ─── Navigation ───────────────────────────────────────────────────────────────
         function navigate(page) {
+            toggleNav(false);   // close the mobile menu after a selection
             document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
 
@@ -1742,7 +1997,10 @@
                 delete options.json;
             }
             const res = await fetch(API + path, { ...options, headers });
-            if (res.status === 401) { doLogout(); throw new Error('Session expired.'); }
+            if (res.status === 401) {
+                handleSessionExpired('Your session expired. Please sign in again.');
+                throw new Error('Session expired.');
+            }
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
             return data;
@@ -1827,12 +2085,27 @@
             const el = document.getElementById('search-results');
             if (!q) { el.innerHTML = '<div class="alert alert-info">Enter a search term above.</div>'; return; }
 
+            // Check the session before sending. This used to be discovered only
+            // from the server's 401, which reloaded the page and lost the term.
+            if (!isSessionValid()) {
+                stashPendingSearch(q);
+                handleSessionExpired(
+                    'Your session expired. Sign in and your search will run automatically.'
+                );
+                return;
+            }
+
+            // Held until the request succeeds so that a 401 we could not predict —
+            // a token revoked server-side, say — replays the search as well.
+            stashPendingSearch(q);
+
             el.innerHTML = '<div class="loading-block"><span class="spinner"></span> Searching…</div>';
             try {
                 const data = await apiGet('/search?q=' + encodeURIComponent(q));
+                clearPendingSearch();
                 renderSearchResults(data.results || [], el);
             } catch (e) {
-                el.innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+                el.innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
             }
         }
 
