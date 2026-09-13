@@ -660,6 +660,17 @@
             touch-action: pan-x pan-y;
         }
 
+        /* A centred flex container spills its overflow both ways, but a scroll
+           container can only reach overflow at the end edge — so once a page was
+           wider than the frame, its left-hand side could not be panned to at all.
+           Sizing the container to its widest page instead puts the whole page
+           inside the scrollable area; min-width keeps a page that is narrower
+           than the frame centred exactly as before. */
+        #pdf-canvas-container {
+            width: max-content;
+            min-width: 100%;
+        }
+
         .viewer-title {
             flex: 1;
             font-family: 'Cormorant Garamond', serif;
@@ -3181,12 +3192,13 @@
             const frame = document.getElementById('pdf-frame');
 
             // renderAllPages replaces every canvas, which resets the scroll to the
-            // top. Note where the middle of the screen was so the same music is
-            // still in front of the reader afterwards.
-            const ratio  = clamped / currentZoom;
-            const anchor = frame
-                ? frame.scrollTop + (frame.clientHeight / 2)
-                : 0;
+            // top left. Note where the middle of the screen was so the same music
+            // is still in front of the reader afterwards — horizontally too, so
+            // zooming in holds the middle of the system rather than jumping to
+            // the left margin.
+            const ratio   = clamped / currentZoom;
+            const anchorY = frame ? frame.scrollTop  + (frame.clientHeight / 2) : 0;
+            const anchorX = frame ? frame.scrollLeft + (frame.clientWidth  / 2) : 0;
 
             currentZoom = clamped;
 
@@ -3194,7 +3206,10 @@
 
             if (frame) {
                 frame.scrollTop =
-                    Math.max(0, (anchor * ratio) - (frame.clientHeight / 2));
+                    Math.max(0, (anchorY * ratio) - (frame.clientHeight / 2));
+
+                frame.scrollLeft =
+                    Math.max(0, (anchorX * ratio) - (frame.clientWidth / 2));
             }
         }
 
