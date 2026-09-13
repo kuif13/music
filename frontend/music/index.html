@@ -629,7 +629,13 @@
                 display: none;
             }
 
-            #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #viewer-close-btn {
+            /* Close plus the zoom pair. The zoom buttons have to survive here:
+               a fullscreened element suppresses the browser's own pinch-zoom on
+               mobile, and on desktop there is no pinch at all, so hiding these
+               left no way to zoom in fullscreen. */
+            #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #viewer-close-btn,
+            #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #zoom-out-btn,
+            #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #zoom-in-btn {
                 display: inline-flex;
                 /* Dimmed so it doesn't compete with the music, but kept on a
                    solid ground so it stays legible over a white page. */
@@ -639,9 +645,20 @@
             }
 
                 #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #viewer-close-btn:hover,
-                #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #viewer-close-btn:focus {
+                #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #viewer-close-btn:focus,
+                #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #zoom-out-btn:hover,
+                #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #zoom-out-btn:focus,
+                #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #zoom-in-btn:hover,
+                #pdf-viewer-overlay.viewer-fullscreen .viewer-toolbar > #zoom-in-btn:focus {
                     opacity: 1;
                 }
+
+        /* One finger scrolls; two-finger gestures go to the pinch handler rather
+           than the browser, whose own pinch-zoom is inert inside a fullscreened
+           element on mobile. */
+        #pdf-frame {
+            touch-action: pan-x pan-y;
+        }
 
         .viewer-title {
             flex: 1;
@@ -1347,8 +1364,8 @@
             <span class="viewer-title" id="viewer-title"></span>
             <button class="btn btn-secondary btn-sm" id="fit-width-btn" onclick="setFitMode('width')">Fit Width</button>
             <button class="btn btn-secondary btn-sm" id="fit-page-btn" onclick="setFitMode('page')">Fit Page</button>
-            <button class="btn btn-secondary btn-sm" onclick="zoomPdf(-0.2)">－</button>
-            <button class="btn btn-secondary btn-sm" onclick="zoomPdf(0.2)">＋</button>
+            <button class="btn btn-secondary btn-sm" id="zoom-out-btn" onclick="zoomPdf(-0.2)" title="Zoom out">－</button>
+            <button class="btn btn-secondary btn-sm" id="zoom-in-btn" onclick="zoomPdf(0.2)" title="Zoom in">＋</button>
             <!--<button class="btn btn-secondary btn-sm" id="contrast-btn" onclick="toggleContrast()">Boost Contrast</button>
     <button class="btn btn-secondary btn-sm" id="threshold-btn" onclick="toggleThreshold()">B&amp;W Threshold</button>
     <button class="btn btn-secondary btn-sm" id="thinline-btn" onclick="toggleThinLineEnhance()">Enhance Thin Lines</button>-->
@@ -3143,9 +3160,42 @@
             ctx.putImageData(imageData, 0, 0);
         }
 
+        const MIN_ZOOM = 0.4;
+        const MAX_ZOOM = 3;
+
+        // True while two fingers are down, so the swipe handler doesn't read the
+        // end of a pinch as a page-turn.
+        let pdfPinchActive  = false;
+        let pdfPinchEndedAt = 0;
+
         function zoomPdf(delta) {
-            currentZoom = Math.min(3, Math.max(0.4, currentZoom + delta));
-            renderAllPages();
+            setPdfZoom(currentZoom + delta);
+        }
+
+        async function setPdfZoom(next) {
+            const clamped =
+                Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next));
+
+            if (Math.abs(clamped - currentZoom) < 0.005) return;
+
+            const frame = document.getElementById('pdf-frame');
+
+            // renderAllPages replaces every canvas, which resets the scroll to the
+            // top. Note where the middle of the screen was so the same music is
+            // still in front of the reader afterwards.
+            const ratio  = clamped / currentZoom;
+            const anchor = frame
+                ? frame.scrollTop + (frame.clientHeight / 2)
+                : 0;
+
+            currentZoom = clamped;
+
+            await renderAllPages();
+
+            if (frame) {
+                frame.scrollTop =
+                    Math.max(0, (anchor * ratio) - (frame.clientHeight / 2));
+            }
         }
 
 
@@ -3248,6 +3298,16 @@
 
             el.addEventListener('touchend', (e) => {
                 if (!touchStartTime) return;
+
+                // A pinch begins as a single touch, so touchStartTime is already
+                // set by the time the second finger lands. Without this, lifting
+                // out of a pinch reads as a swipe and turns the page. The grace
+                // period keeps it order-independent of the pinch listeners.
+                if (pdfPinchActive || (Date.now() - pdfPinchEndedAt) < 400) {
+                    touchStartTime = 0;
+                    return;
+                }
+
                 const touch = e.changedTouches[0];
                 const dx = touch.clientX - touchStartX;
                 const dy = touch.clientY - touchStartY;
@@ -3265,6 +3325,73 @@
                     viewerNavigate(-1);  // swipe right → prev
                 }
             }, { passive: true });
+        })();
+
+        // Pinch to zoom. Registered after the swipe handler so that on touchend
+        // the swipe listener still sees pdfPinchActive as true and stands down.
+        (function setupPdfPinchZoom() {
+            const frame     = document.getElementById('pdf-frame');
+            const container = document.getElementById('pdf-canvas-container');
+            if (!frame || !container) return;
+
+            let startDist = 0;
+            let startZoom = 1;
+            let scale     = 1;
+
+            const spread = (touches) => Math.hypot(
+                touches[0].clientX - touches[1].clientX,
+                touches[0].clientY - touches[1].clientY
+            );
+
+            frame.addEventListener('touchstart', (e) => {
+                if (e.touches.length !== 2) return;
+
+                pdfPinchActive = true;
+                startDist      = spread(e.touches);
+                startZoom      = currentZoom;
+                scale          = 1;
+
+                container.style.transformOrigin = 'top center';
+                container.style.willChange      = 'transform';
+
+                e.preventDefault();
+            }, { passive: false });
+
+            frame.addEventListener('touchmove', (e) => {
+                if (!pdfPinchActive || e.touches.length !== 2 || !startDist) return;
+
+                e.preventDefault();
+
+                // Scale the existing canvases for immediate feedback. Re-rendering
+                // every page on each touchmove would be far too slow on a phone,
+                // so the crisp render happens once, when the fingers lift.
+                const target = Math.min(
+                    MAX_ZOOM,
+                    Math.max(MIN_ZOOM, startZoom * (spread(e.touches) / startDist))
+                );
+
+                scale = target / startZoom;
+                container.style.transform = 'scale(' + scale + ')';
+            }, { passive: false });
+
+            function endPinch() {
+                if (!pdfPinchActive) return;
+
+                pdfPinchActive  = false;
+                pdfPinchEndedAt = Date.now();
+
+                container.style.transform       = '';
+                container.style.transformOrigin = '';
+                container.style.willChange      = '';
+
+                setPdfZoom(startZoom * scale);
+            }
+
+            frame.addEventListener('touchend', (e) => {
+                if (e.touches.length < 2) endPinch();
+            }, { passive: true });
+
+            frame.addEventListener('touchcancel', endPinch, { passive: true });
         })();
 
         function downloadPdf(pdfId, fileName) {
