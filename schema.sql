@@ -14,6 +14,10 @@ CREATE TABLE IF NOT EXISTS users (
   is_active   INTEGER NOT NULL DEFAULT 1,
   reset_token TEXT,
   reset_token_expires INTEGER,
+  -- Unix seconds of the last successful sign-in; NULL until the user has one.
+  -- Existing databases get this via migrations/001_add_users_last_login_at.sql,
+  -- since the CREATE TABLE above is IF NOT EXISTS and will not alter them.
+  last_login_at INTEGER,
   created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
 );

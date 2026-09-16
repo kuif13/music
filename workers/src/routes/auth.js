@@ -31,6 +31,15 @@ export async function handleAuth(request, env, path) {
     const ok = await verifyPassword(password, user.password_hash);
     if (!ok) return errorResponse('Invalid credentials', 401);
 
+    // Recorded only past the password check, so this is genuinely the last
+    // *successful* sign-in and not merely the last attempt. Awaited rather than
+    // fired and forgotten: without ctx.waitUntil here, a floating promise can be
+    // cut off when the response ends. It is one indexed write on a route that
+    // runs once per session.
+    await env.DB.prepare(
+      'UPDATE users SET last_login_at = unixepoch() WHERE id = ?'
+    ).bind(user.id).run();
+
     const token = await signJWT(
       { sub: user.id, email: user.email, role: user.role, name: user.name },
       env.JWT_SECRET,

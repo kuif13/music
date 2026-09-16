@@ -22,7 +22,7 @@ export async function handleUsers(request, env, path, user) {
   // ── GET /users ───────────────────────────────────────────────────────────────
   if (!userId && method === 'GET') {
     const { results } = await env.DB.prepare(
-      'SELECT id, email, name, role, is_active, created_at FROM users ORDER BY name'
+      'SELECT id, email, name, role, is_active, created_at, last_login_at FROM users ORDER BY name'
     ).all();
     return jsonResponse(results);
   }
@@ -51,7 +51,7 @@ export async function handleUsers(request, env, path, user) {
   // ── GET /users/:id ───────────────────────────────────────────────────────────
   if (userId && method === 'GET') {
     const row = await env.DB.prepare(
-      'SELECT id, email, name, role, is_active, created_at FROM users WHERE id = ?'
+      'SELECT id, email, name, role, is_active, created_at, last_login_at FROM users WHERE id = ?'
     ).bind(userId).first();
     if (!row) return errorResponse('User not found', 404);
     return jsonResponse(row);

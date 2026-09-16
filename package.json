@@ -7,6 +7,7 @@
     "deploy": "wrangler deploy",
     "db:init": "wrangler d1 execute churchmouse-db --file=schema.sql",
     "db:local": "wrangler d1 execute churchmouse-db --local --file=schema.sql",
+    "db:migrate": "npx --yes wrangler@4 d1 execute churchmouse-db --remote --file=migrations/001_add_users_last_login_at.sql",
     "pages:deploy": "wrangler pages deploy frontend/ --project-name=churchmouse-frontend --branch=production"
   },
   "dependencies": {},

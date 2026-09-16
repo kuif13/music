@@ -4060,6 +4060,34 @@
             }
         }
 
+        // last_login_at is unix seconds, or null for an account that has not
+        // signed in since the column was added. Shows the date with a relative
+        // hint, since "3 days ago" answers the question an admin is usually
+        // asking faster than a date does; the exact stamp is in the tooltip.
+        function fmtLastLogin(ts) {
+            if (!ts) {
+                return '<span style="color:var(--stone)">Never</span>';
+            }
+
+            const when = new Date(ts * 1000);
+            const days = Math.floor((Date.now() - when.getTime()) / 86400000);
+
+            const relative =
+                days <= 0  ? 'today'          :
+                days === 1 ? 'yesterday'      :
+                days < 30  ? days + ' days ago' :
+                days < 365 ? Math.floor(days / 30) + ' months ago' :
+                             Math.floor(days / 365) + ' years ago';
+
+            const date = when.toLocaleDateString(undefined, {
+                day: '2-digit', month: 'short', year: 'numeric'
+            });
+
+            return esc(date) +
+                '<br><span style="color:var(--stone);font-size:0.72rem" title="' +
+                esc(when.toLocaleString()) + '">' + esc(relative) + '</span>';
+        }
+
         function renderAdminUsers(users) {
             const el = document.getElementById('admin-users-list');
             if (!users.length) {
@@ -4071,7 +4099,7 @@
                   <table class="tbl">
                     <thead>
                       <tr>
-                        <th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th>
+                        <th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -4085,6 +4113,7 @@
                               ${u.is_active ? '● Active' : '○ Inactive'}
                             </span>
                           </td>
+                          <td style="font-size:0.8rem;white-space:nowrap">${fmtLastLogin(u.last_login_at)}</td>
                           <td>
                             <div style="display:flex;gap:0.3rem;flex-wrap:wrap">
                               <button class="btn btn-secondary btn-sm" onclick="showEditUserModal('${u.id}')">Edit</button>
