@@ -1272,7 +1272,6 @@
             <nav class="header-nav" id="main-nav">
                 <div class="nav-user" id="nav-user"></div>
                 <button class="nav-btn" data-page="search" onclick="navigate('search')">🔍 Search</button>
-                <button class="nav-btn" data-page="playlists" onclick="navigate('playlists')">♪ Playlists</button>
                 <button class="nav-btn" data-page="content" onclick="navigate('content')" id="nav-content" style="display:none">📁 Content</button>
                 <button class="nav-btn" data-page="admin" onclick="navigate('admin')" id="nav-admin" style="display:none">⚙ Admin</button>
                 <button class="nav-btn nav-signout" onclick="confirmLogout()">⏻ Sign out</button>
@@ -2252,7 +2251,6 @@
                   <div class="pdf-actions">
                     <button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); viewPdf('${p.id}','${esc(masterTitle)} – ${esc(p.description)}')">View</button>
                     <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); downloadPdf('${p.id}','${esc(p.file_name)}')">↓</button>
-                    <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); showAddToPlaylistModal('${p.id}','${esc(p.description)}')">+ List</button>
                   </div>
                 </div>
               `).join('');
