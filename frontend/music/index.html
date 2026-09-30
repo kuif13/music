@@ -1718,7 +1718,7 @@
         let viewerIndex = 0;
 
         // ─── Session ──────────────────────────────────────────────────────────────────
-        // The API issues a 24h JWT whose exp claim is readable client-side, so an
+        // The API issues a JWT whose exp claim is readable client-side, so an
         // expired session can be caught before a request goes out instead of after
         // the server rejects it. Catching it late was what discarded a search term:
         // the 401 handler reloaded the page, taking the typed query with it.

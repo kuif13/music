@@ -56,6 +56,8 @@ export async function verifyJWT(request, env) {
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!token) return null;
 
+  let payload;
+
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
@@ -67,13 +69,34 @@ export async function verifyJWT(request, env) {
     const valid = await crypto.subtle.verify('HMAC', key, sig, new TextEncoder().encode(signingInput));
     if (!valid) return null;
 
-    const payload = JSON.parse(parseB64url(parts[1]));
-    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
-
-    return payload;
+    payload = JSON.parse(parseB64url(parts[1]));
   } catch {
     return null;
   }
+
+  // Checked before the database: an expired or forged token costs no query.
+  if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+
+  // A token outlives the account state it was issued against — it lasts 14
+  // days, and deactivating someone would otherwise not lock them out until it
+  // expired. Every path that accepts a token comes through here, including the
+  // ?token= links pdf.js uses for view and download, so this one check covers
+  // all of them. A deleted account (no row) is rejected the same way.
+  //
+  // Deliberately outside the try above. A database failure has to surface as a
+  // 500, not as a 401: the frontend treats a 401 as "session expired" and
+  // discards the token, so a transient D1 error would otherwise sign everyone
+  // out.
+  //
+  // Role is still taken from the token, so a role change applies at the user's
+  // next sign-in.
+  const account = await env.DB.prepare(
+    'SELECT is_active FROM users WHERE id = ?'
+  ).bind(payload.sub).first();
+
+  if (!account || !account.is_active) return null;
+
+  return payload;
 }
 
 // ─── Password hashing (PBKDF2 via Web Crypto) ─────────────────────────────────

@@ -40,10 +40,13 @@ export async function handleAuth(request, env, path) {
       'UPDATE users SET last_login_at = unixepoch() WHERE id = ?'
     ).bind(user.id).run();
 
+    // 14 days. verifyJWT re-checks is_active on every request, so deactivation
+    // is immediate; the role, though, is read from this token, so a role change
+    // can take up to this long to reach a session that is already open.
     const token = await signJWT(
       { sub: user.id, email: user.email, role: user.role, name: user.name },
       env.JWT_SECRET,
-      72   // 3 days
+      14 * 24
     );
 
     return jsonResponse({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
