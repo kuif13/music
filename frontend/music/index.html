@@ -1297,6 +1297,7 @@
                     <input type="text" id="search-input" placeholder="e.g. Amazing Grace, Handel, trumpet in Bb…" autocomplete="off"
                            onkeydown="if(event.key==='Enter') doSearch()">
                     <button class="btn btn-primary" onclick="doSearch()">Search</button>
+                    <button class="btn btn-secondary" onclick="clearSearch()">Clear</button>
                 </div>
                 <div id="search-results"></div>
             </div>
@@ -2212,6 +2213,20 @@
             }
         }
 
+        // Mirrors clearContentSearch on the Content screen: back to the empty
+        // state the page opens in, with the cursor ready for the next term.
+        function clearSearch() {
+            const input = document.getElementById('search-input');
+            input.value = '';
+            document.getElementById('search-results').innerHTML = '';
+
+            // Clearing is an explicit "not this one", so a term held over from an
+            // expired session should not be replayed at the next sign-in.
+            clearPendingSearch();
+
+            input.focus();
+        }
+
         function renderSearchResults(results, container) {
             if (!results.length) {
                 container.innerHTML = `<div class="empty"><div class="empty-icon">🎵</div><h3>No results found</h3><p>Try different keywords or a composer name.</p></div>`;
@@ -2841,6 +2856,13 @@
 
         function setFitMode(mode) {
             fitMode = mode;
+
+            // The fit scale is multiplied by currentZoom, so without this a page
+            // zoomed to 2x would be drawn at twice the fitted size — the button
+            // would not actually fit anything. Also applies when the mode is
+            // already selected, so tapping it again undoes a zoom.
+            currentZoom = 1.0;
+
             updateFitModeButtons();
             renderAllPages();
         }
